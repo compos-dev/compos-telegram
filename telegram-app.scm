@@ -251,25 +251,12 @@
                           (list (list 'tag "span" 'class "tg-time"
                                       'text (string-append (component--get p 'time "") (if out "  ✓✓" "")))))))))))
 
-(defcomponent 'telegram/compose
-  "The message field at the foot of a conversation: the DRAFT you are typing with a caret, else TEXT as the hint, and the send button. A click on the field sends CLICK; the button sends telegram:send."
-  '((click string optional) (text string optional) (draft string optional))
-  '(click "telegram:compose" text "Write a message…" draft "")
-  (lambda (p)
-    (let ((draft (component--get p 'draft "")))
-      (list 'tag "div" 'class (if (equal? draft "") "tg-compose" "tg-compose tg-typing")
-            'children
-            (list (list 'tag "div" 'class "tg-compose-field" 'click (component--get p 'click "telegram:compose")
-                        'children
-                        (if (equal? draft "")
-                            (list (list 'tag "span" 'class "tg-caret" 'text "")
-                                  (list 'tag "span" 'class "tg-hint" 'text (component--get p 'text "Write a message…")))
-                            (let ((lines (telegram--lines draft)))
-                              (append (reverse (cdr (reverse lines)))
-                                      (list (list 'tag "div" 'class "tg-line"
-                                                  'children (list (list 'tag "span" 'text (plist-get (car (reverse lines)) 'text))
-                                                                  (list 'tag "span" 'class "tg-caret" 'text ""))))))))
-                  (list 'tag "span" 'class "tg-send" 'click "telegram:send" 'text "➤"))))))
+(define (telegram--input-row)
+  "the foot of a conversation: the chat's own input, the buffer's text, and the send button"
+  (list 'tag "c-prompt" 'class "ag-inputrow tg-inputrow"
+        'children (list (list 'tag "c-input" 'class "ag-input tg-input" 'input #t
+                              'hint "Write a message…")
+                        (list 'tag "button" 'class "tg-send" 'click "telegram:send" 'text "➤"))))
 
 (define-style! 'telegram "
 .tg-header { display:flex; align-items:center; gap:12px; padding:10px 14px; margin:0 0 6px; border-bottom:1px solid var(--border-bg); font-family:var(--font-sans); }
@@ -290,21 +277,14 @@
 .tg-line { white-space:pre-wrap; }
 .tg-time { float:right; margin:4px 0 -2px 10px; font-size:.72em; color:var(--dim-fg, #8a8a8a); opacity:.85; }
 .tg-out .tg-time { color:#4fae4e; }
-.tg-compose { display:flex; align-items:center; gap:10px; margin:12px 14px 8px; padding:8px 8px 8px 16px; border-radius:22px; background:color-mix(in srgb, var(--default-fg) 6%, var(--default-bg)); cursor:text; font-family:var(--font-sans); }
-.tg-compose-field { flex:1; min-width:0; color:var(--default-fg); cursor:text; line-height:1.35; }
-.tg-hint { color:var(--dim-fg, #8a8a8a); }
-.tg-caret { display:inline-block; width:2px; height:1.1em; margin:0 1px -2px 0; background:#3390ec; animation:tg-blink 1s steps(1) infinite; }
-@keyframes tg-blink { 50% { opacity:0; } }
-.tg-compose.tg-typing { box-shadow:0 0 0 1.5px #3390ec inset; }
-.blocks-scroll:has(> .tg-compose) { display:flex; flex-direction:column; }
-.blocks-scroll:has(> .tg-compose) > * { flex-shrink:0; }
-.blocks-scroll:has(> .tg-compose) > :nth-child(1 of .tg-day) { margin-top:auto; }
-.blocks-scroll:not(:has(> .tg-day)) > .tg-compose { margin-top:auto; }
-.tg-compose { position:sticky; bottom:8px; z-index:2; background:color-mix(in srgb, var(--default-fg) 6%, var(--default-bg)); box-shadow:0 -6px 12px var(--default-bg); }
-.tg-compose.tg-typing { box-shadow:0 0 0 1.5px #3390ec inset, 0 -6px 12px var(--default-bg); }
-.tg-send { cursor:pointer; }
-.tg-compose:not(.tg-typing) .tg-send { opacity:.45; }
-.tg-send { width:32px; height:32px; border-radius:50%; background:#3390ec; color:#fff; display:flex; align-items:center; justify-content:center; font-size:.95em; }
+.tg-view { font-family:var(--font-sans); }
+.tg-scroll { display:flex; flex-direction:column; }
+.tg-scroll > * { flex-shrink:0; }
+.tg-scroll > :first-child { margin-top:auto; }
+.tg-inputrow { display:flex; align-items:center; gap:10px; margin:8px 14px 10px; padding:6px 6px 6px 16px; border-radius:22px; background:color-mix(in srgb, var(--default-fg) 6%, var(--default-bg)); border:none; }
+.tg-inputrow:focus-within { box-shadow:0 0 0 1.5px #3390ec inset; }
+.tg-input { flex:1; min-width:0; font-family:var(--font-sans); line-height:1.35; }
+.tg-send { flex:none; width:32px; height:32px; border:0; border-radius:50%; background:#3390ec; color:#fff; display:flex; align-items:center; justify-content:center; font-size:.95em; cursor:pointer; }
 ")
 
 (domain! 'chat)
@@ -327,26 +307,30 @@
             'sender (if (and group? (not (plist-get m 'out))) (telegram--str (plist-get m 'sender) "") "")
             'color (telegram--avatar-color (plist-get m 'sender_id))))))
 
-(define (telegram-detail-blocks d msgs notice &optional draft)
+(define (telegram-detail-blocks d msgs notice)
+  "the page of chat D as the agent chat draws its own: the header, the transcript that keeps to its newest message, and the input at the foot"
   (let* ((u (or (plist-get d 'unread) 0))
          (status (string-append (telegram--str (plist-get d 'kind) "chat")
                                 (if (> u 0) (string-append " · " (number->string u) " unread") ""))))
-    (append
-      (list (component 'telegram/header
-              (list 'name (telegram--name d) 'status status 'color (telegram--avatar-color (plist-get d 'id))))
-            (component 'ui/actions (list 'actions telegram--detail-actions)))
-      (if (pair? msgs)
-          (let loop ((ms msgs) (day #f) (acc '()))
-            (if (null? ms)
-                (reverse acc)
-                (let* ((m (car ms))
-                       (ts (plist-get m 'ts))
-                       (this (if (number? ts) (format-time ts "%B %-d") ""))
-                       (acc (if (equal? this day) acc
-                                (cons (component 'telegram/day (list 'text this)) acc))))
-                  (loop (cdr ms) this (cons (telegram--message-block d m) acc)))))
-          (list (component 'ui/empty (list 'text (or notice "No messages.")))))
-      (list (component 'telegram/compose (list 'click "telegram:compose" 'draft (or draft "")))))))
+    (list (list 'tag "c-group" 'class "tg-top"
+                'children (list (component 'telegram/header
+                                  (list 'name (telegram--name d) 'status status 'color (telegram--avatar-color (plist-get d 'id))))
+                                (component 'ui/actions (list 'actions telegram--detail-actions))))
+          (list 'tag "c-transcript" 'class "ag-scroll tg-scroll"
+                'isolate #t 'follow #t 'anchor "transcript"
+                'children
+                (if (pair? msgs)
+                    (let loop ((ms msgs) (day #f) (acc '()))
+                      (if (null? ms)
+                          (reverse acc)
+                          (let* ((m (car ms))
+                                 (ts (plist-get m 'ts))
+                                 (this (if (number? ts) (format-time ts "%B %-d") ""))
+                                 (acc (if (equal? this day) acc
+                                          (cons (component 'telegram/day (list 'text this)) acc))))
+                            (loop (cdr ms) this (cons (telegram--message-block d m) acc)))))
+                    (list (component 'ui/empty (list 'text (or notice "No messages."))))))
+          (telegram--input-row))))
 
 (domain! 'chat)
 (effects! '(write external display))
@@ -357,14 +341,21 @@
   buf)
 
 (define (telegram--draw! buf)
+  "draw chat BUF; the buffer's text is the message you are typing, and it stays"
   (let ((d (telegram--dialog (buffer-local buf 'telegram-chat))))
     (when d
-      (anchor-page! buf (telegram-detail-blocks d (or (buffer-local buf 'telegram-messages) '())
-                                                (buffer-local buf 'telegram-notice)
-                                                (or (buffer-local buf 'telegram-draft) "")))
-      ;; a chat opens at its newest message, as Telegram does
-      (buffer-goto! buf (buffer-size buf))
-      (buffer-windows-follow-point! buf))))
+      (unless (equal? (buffer-local-value 'render-input buf) "telegram-input-mark")
+        ;; a page drawn as anchors before: its text goes, the field starts empty
+        (when (minor-mode-on? buf "anchor-mode") (disable-minor-mode! buf "anchor-mode"))
+        (buffer-set-text! buf "")
+        (buffer-set-read-only! buf #f))
+      (buffer-set-locals! buf
+        (list 'render-mode "blocks"
+              'render-root '(tag "c-buffer" class "agent-view tg-view")
+              'render-input "telegram-input-mark"
+              'telegram-input-mark 0
+              'render-blocks (telegram-detail-blocks d (or (buffer-local buf 'telegram-messages) '())
+                                                     (buffer-local buf 'telegram-notice)))))))
 
 (define (telegram--read-page! buf)
   (let ((id (buffer-local buf 'telegram-chat)))
@@ -552,54 +543,26 @@
 (define-command "telegram-reply" "Send a message to this Telegram chat as yourself"
   (lambda () (telegram-reply-interactive! (telegram--current))))
 
-;;; the field at the foot of a page: what you type stands there as a draft
-;;; until RET sends it
+;;; the field at the foot of a page is the buffer's text, as in the agent
+;;; chat: you type and edit it there, and RET sends it
 
-(define (telegram--key-text)
-  "the text the key that ran this command types, or #f"
-  (let* ((ks (last-keys))
-         (k (cond ((string? ks) ks) ((pair? ks) (car (reverse ks))) (else #f))))
-    (cond ((equal? k "SPC") " ")
-          ((and (string? k) (= (string-length k) 1)) k)
-          (else #f))))
 
-(define (telegram--draft buf) (or (buffer-local buf 'telegram-draft) ""))
 
-(define (telegram--set-draft! buf text)
-  (buffer-set-local! buf 'telegram-draft text)
-  (telegram--draw! buf)
-  (buffer-goto! buf (buffer-size buf))
-  (buffer-windows-follow-point! buf))
 
-(define-command "telegram-type" "Type into this Telegram chat's message field"
-  (lambda ()
-    (let ((buf (current-buffer)) (t (telegram--key-text)))
-      (when t (telegram--set-draft! buf (string-append (telegram--draft buf) t))))))
 
-(define-command "telegram-newline" "Start a new line in the message field"
-  (lambda ()
-    (let ((buf (current-buffer)))
-      (telegram--set-draft! buf (string-append (telegram--draft buf) "\n")))))
 
-(define-command "telegram-backspace" "Delete the last character of the message field"
-  (lambda ()
-    (let* ((buf (current-buffer)) (s (telegram--draft buf)))
-      (when (> (string-length s) 0)
-        (telegram--set-draft! buf (substring s 0 (- (string-length s) 1)))))))
 
-(define (telegram--typing-for from)
-  "a command that types the key into the field when it is a character, else runs FROM"
-  (let ((name (string-append "telegram-type/" from)))
-    (define-command name (string-append "Type into the message field, else " from)
-      (lambda ()
-        (let ((t (telegram--key-text)) (buf (current-buffer)))
-          (if t
-              (telegram--set-draft! buf (string-append (telegram--draft buf) t))
-              (run-command from)))))
-    name))
 
 (define (telegram--claim-letters! buf)
   "every plain key another map of the page binds types into the field instead"
+  ;; a page from before the field was the buffer's text typed through
+  ;; telegram-type remaps; they go
+  (keymap--fact! buf 'remaps
+    (filter (lambda (r) (let ((to (and (pair? (cdr r)) (cadr r))))
+                         (not (and (string? to)
+                                   (or (string-prefix? "telegram-type" to)
+                                       (equal? to "telegram-backspace"))))))
+            (or (keymap--fact buf 'remaps) '())))
   (for-each
     (lambda (m)
       (unless (member m (list "global" "telegram-detail-mode-map" buf))
@@ -608,25 +571,38 @@
                       (when (and (= (string-length (car b)) 1) (string? cmd)
                                  (not (string-prefix? "telegram-" cmd))
                                  (not (string-prefix? "keymap:" cmd)))
-                        (local-remap*! buf cmd (telegram--typing-for cmd)))))
+                        (local-remap*! buf cmd "self-insert-command"))))
                   (keymap-bindings m))))
     (buffer-keymaps buf)))
 
-(define-command "telegram-end" "Go to the newest message and the field under it"
+(define (telegram--follow! buf)
+  "keep BUF's transcript at its newest message again, as M-> does in the agent chat"
+  (let ((seq (buffer-local-value 'follow-seq buf)))
+    (buffer-set-local! buf 'follow-place #f)
+    (buffer-set-local! buf 'follow-seq (+ 1 (if (number? seq) seq 0)))))
+
+(define-command "telegram-end" "Go to the newest message, and keep to it as messages come"
   (lambda ()
     (let ((buf (current-buffer)))
       (buffer-goto! buf (buffer-size buf))
-      (buffer-windows-follow-point! buf))))
+      (telegram--follow! buf))))
+
+(define-command "telegram-start" "Go to the first message of this Telegram chat"
+  (lambda ()
+    (let* ((buf (current-buffer)) (seq (buffer-local-value 'follow-seq buf)))
+      (buffer-set-local! buf 'follow-place '(#t 0 #f 0))
+      (buffer-set-local! buf 'follow-seq (+ 1 (if (number? seq) seq 0))))))
 
 (define-command "telegram-clear-draft" "Empty the message field"
-  (lambda () (telegram--set-draft! (current-buffer) "")))
+  (lambda () (buffer-set-text! (current-buffer) "")))
 
 (define-command "telegram-send" "Send what the message field holds to this Telegram chat"
   (lambda ()
-    (let* ((buf (current-buffer)) (d (telegram--current)) (text (telegram--draft buf)))
+    (let* ((buf (current-buffer)) (d (telegram--current)) (text (buffer-text buf)))
       (cond ((not d) (message "Telegram: no chat here"))
             ((equal? (string-trim text) "") (message "Telegram: type a message first"))
-            (else (telegram--set-draft! buf "")
+            (else (buffer-set-text! buf "")
+                  (telegram--follow! buf)
                   (telegram--send-text! d text))))))
 (define-command "telegram-mark-read" "Mark this Telegram chat read"
   (lambda () (telegram-mark-read-interactive! (telegram--current))))
@@ -724,22 +700,21 @@
 
 (define-mode "telegram-detail-mode"
   (lambda ()
-    ;; typing anywhere on the page types into the field at its foot, as in Telegram
-    (let ((buf (current-buffer)))
-      (local-remap*! buf "self-insert-command" "telegram-type")
-      (local-remap*! buf "delete-backward-char" "telegram-backspace"))))
+    ;; the page is the agent chat's view: the buffer's text is the field
+    (buffer-set-read-only! (current-buffer) #f)))
 
 (mode-keys! "telegram-detail-mode"
   '(("RET" "telegram-send")
-    ("S-RET" "telegram-newline")
+    ("S-RET" "newline")
     ("ESC" "telegram-clear-draft")
     ("M->" "telegram-end")
+    ("M-<" "telegram-start")
     ("C-c r" "telegram-mark-read")
     ("C-c s" "telegram-search")
     ("C-c g" "telegram-refresh")))
 
 (mode-doc! "telegram-detail-mode"
-  "One Telegram conversation beside the list, oldest message first, as Telegram draws it. Type and the text goes into the field at the foot; RET sends it as yourself, S-RET starts a new line, DEL deletes, ESC clears it. C-c r marks the chat read, C-c s searches every chat, C-c g reads Telegram again. New messages appear by themselves.")
+  "One Telegram conversation beside the list, drawn as the agent chat draws its own: the transcript keeps to the newest message, and the field at the foot is the buffer's text, so every editing key works in it. RET sends it as yourself, S-RET starts a new line, ESC clears it. Scroll up and the transcript stays where you read; M-> goes back to the newest message, M-< to the first. C-c r marks the chat read, C-c s searches every chat, C-c g reads Telegram again. New messages appear by themselves.")
 
 (detail-name! "telegram-detail-mode"
   (lambda (buf) (string-append "*telegram kept: " (let ((d (telegram--dialog (buffer-local buf 'telegram-chat)))) (if d (telegram--name d) buf)) "*")))
