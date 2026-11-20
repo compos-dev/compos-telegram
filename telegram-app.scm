@@ -298,7 +298,9 @@
 .tg-compose.tg-typing { box-shadow:0 0 0 1.5px #3390ec inset; }
 .blocks-scroll:has(> .tg-compose) { display:flex; flex-direction:column; }
 .blocks-scroll:has(> .tg-compose) > * { flex-shrink:0; }
-.tg-compose { margin-top:auto; position:sticky; bottom:8px; z-index:2; background:color-mix(in srgb, var(--default-fg) 6%, var(--default-bg)); box-shadow:0 -6px 12px var(--default-bg); }
+.blocks-scroll:has(> .tg-compose) > :nth-child(1 of .tg-day) { margin-top:auto; }
+.blocks-scroll:not(:has(> .tg-day)) > .tg-compose { margin-top:auto; }
+.tg-compose { position:sticky; bottom:8px; z-index:2; background:color-mix(in srgb, var(--default-fg) 6%, var(--default-bg)); box-shadow:0 -6px 12px var(--default-bg); }
 .tg-compose.tg-typing { box-shadow:0 0 0 1.5px #3390ec inset, 0 -6px 12px var(--default-bg); }
 .tg-send { cursor:pointer; }
 .tg-compose:not(.tg-typing) .tg-send { opacity:.45; }
@@ -359,7 +361,10 @@
     (when d
       (anchor-page! buf (telegram-detail-blocks d (or (buffer-local buf 'telegram-messages) '())
                                                 (buffer-local buf 'telegram-notice)
-                                                (or (buffer-local buf 'telegram-draft) ""))))))
+                                                (or (buffer-local buf 'telegram-draft) "")))
+      ;; a chat opens at its newest message, as Telegram does
+      (buffer-goto! buf (buffer-size buf))
+      (buffer-windows-follow-point! buf))))
 
 (define (telegram--read-page! buf)
   (let ((id (buffer-local buf 'telegram-chat)))
