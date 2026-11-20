@@ -299,6 +299,7 @@
 .tg-avatar { flex:none; width:42px; height:42px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:600; font-size:1.05em; }
 .tg-photo { display:block; object-fit:cover; padding:0; }
 .tg-row { display:flex; align-items:center; gap:12px; padding:7px 10px; font-family:var(--font-sans); }
+.semantic-list > .semantic-item.tg-row { display:flex; }
 .tg-row-avatar { width:48px; height:48px; font-size:1.1em; }
 .tg-row-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
 .tg-row-top, .tg-row-bottom { display:flex; align-items:center; gap:8px; min-width:0; }
