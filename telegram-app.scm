@@ -579,6 +579,7 @@
   "keep BUF's transcript at its newest message again, as M-> does in the agent chat"
   (let ((seq (buffer-local-value 'follow-seq buf)))
     (buffer-set-local! buf 'follow-place #f)
+    (buffer-set-local! buf 'telegram-nav #f)
     (buffer-set-local! buf 'follow-seq (+ 1 (if (number? seq) seq 0)))))
 
 (define-command "telegram-end" "Go to the newest message, and keep to it as messages come"
@@ -593,6 +594,85 @@
       (buffer-set-local! buf 'follow-place '(#t 0 #f 0))
       (buffer-set-local! buf 'follow-seq (+ 1 (if (number? seq) seq 0))))))
 
+;;; the agent chat's keys on the field: <up> and <down> walk what you sent
+;;; here, M-<up> and M-<down> step through the messages, and a key that
+;;; types brings the transcript back to the newest message
+
+(define (telegram--sent buf) (or (buffer-local buf 'telegram-sent) '()))
+
+(define (telegram--remember-sent! buf text)
+  (buffer-set-local! buf 'telegram-sent
+    (cons text (filter (lambda (s) (not (equal? s text))) (telegram--sent buf))))
+  (buffer-set-local! buf 'telegram-history-pos #f))
+
+(define (telegram--history-move! dir)
+  "DIR -1 recalls the message sent before, 1 the one after; off the first or last line of the field it moves the line"
+  (let* ((buf (current-buffer))
+         (text (buffer-text buf))
+         (pt (buffer-point buf))
+         (first? (not (string-search "\n" (substring-bytes text 0 pt))))
+         (last? (not (string-search "\n" (substring-bytes text pt (string-byte-length text)))))
+         (ring (telegram--sent buf))
+         (pos (buffer-local buf 'telegram-history-pos)))
+    (cond ((if (< dir 0) (not first?) (not last?))
+           (run-command (if (< dir 0) "previous-line" "next-line")))
+          ((< dir 0)
+           (let ((i (if (integer? pos) (+ pos 1) 0)))
+             (if (>= i (length ring))
+                 (message (if (null? ring) "nothing sent here yet" "no older message"))
+                 (begin
+                   (unless (integer? pos) (buffer-set-local! buf 'telegram-history-draft text))
+                   (buffer-set-local! buf 'telegram-history-pos i)
+                   (buffer-set-text! buf (list-ref ring i))
+                   (buffer-goto! buf (buffer-size buf))))))
+          ((integer? pos)
+           (let ((i (- pos 1)))
+             (buffer-set-local! buf 'telegram-history-pos (if (< i 0) #f i))
+             (buffer-set-text! buf (if (< i 0) (or (buffer-local buf 'telegram-history-draft) "") (list-ref ring i)))
+             (buffer-goto! buf (buffer-size buf))))
+          (else (run-command "next-line")))))
+
+(define-command "telegram-history-previous" "Recall the message you sent before, as the agent chat does"
+  (lambda () (telegram--history-move! -1)))
+(define-command "telegram-history-next" "Recall the message you sent after, as the agent chat does"
+  (lambda () (telegram--history-move! 1)))
+
+(define (telegram--transcript-count buf)
+  (let ((tr (find (lambda (n) (equal? (plist-get n 'tag) "c-transcript"))
+                  (or (buffer-local-value 'render-blocks buf) '()))))
+    (if tr (length (or (plist-get tr 'children) '())) 0)))
+
+(define (telegram--step! buf delta)
+  "show the message DELTA from the one at the top, as M-<up> and M-<down> do in the agent chat; past the newest it keeps to the newest again"
+  (let* ((total (telegram--transcript-count buf))
+         (fp (buffer-local-value 'follow-place buf))
+         (cur (and (pair? fp) (car fp) (buffer-local buf 'telegram-nav)))
+         (target (+ (if (integer? cur) cur total) delta)))
+    (if (>= target total)
+        (begin (buffer-set-local! buf 'telegram-nav #f) (telegram--follow! buf))
+        (let ((target (max 0 target)) (seq (buffer-local-value 'follow-seq buf)))
+          (buffer-set-local! buf 'telegram-nav target)
+          (buffer-set-local! buf 'follow-place (list #t 0 target 0))
+          (buffer-set-local! buf 'follow-seq (+ 1 (if (number? seq) seq 0)))))))
+
+(define-command "telegram-previous-message" "Show the message before at the top"
+  (lambda () (telegram--step! (current-buffer) -1)))
+(define-command "telegram-next-message" "Show the message after at the top"
+  (lambda () (telegram--step! (current-buffer) 1)))
+
+(define telegram--typing-commands
+  '("self-insert-command" "delete-backward-char" "delete-char" "newline" "yank"))
+
+(define (telegram-type-follows!)
+  "a key that types on a page read away from the bottom brings it back to the newest message"
+  (let ((buf (current-buffer)))
+    (when (and (buffer-derived-mode? buf "telegram-detail-mode")
+               (member (editing--command-name) telegram--typing-commands)
+               (let ((fp (buffer-local-value 'follow-place buf))) (and (pair? fp) (car fp))))
+      (buffer-set-local! buf 'telegram-nav #f)
+      (telegram--follow! buf))))
+(add-hook! 'post-command-hook 'telegram-type-follows!)
+
 (define-command "telegram-clear-draft" "Empty the message field"
   (lambda () (buffer-set-text! (current-buffer) "")))
 
@@ -602,6 +682,8 @@
       (cond ((not d) (message "Telegram: no chat here"))
             ((equal? (string-trim text) "") (message "Telegram: type a message first"))
             (else (buffer-set-text! buf "")
+                  (telegram--remember-sent! buf text)
+                  (buffer-set-local! buf 'telegram-nav #f)
                   (telegram--follow! buf)
                   (telegram--send-text! d text))))))
 (define-command "telegram-mark-read" "Mark this Telegram chat read"
@@ -707,8 +789,13 @@
   '(("RET" "telegram-send")
     ("S-RET" "newline")
     ("ESC" "telegram-clear-draft")
+    ("<up>" "telegram-history-previous")
+    ("<down>" "telegram-history-next")
     ("M->" "telegram-end")
     ("M-<" "telegram-start")
+    ("M-<up>" "telegram-previous-message")
+    ("M-<down>" "telegram-next-message")
+    ("C-c k" "kill-buffer")
     ("C-c r" "telegram-mark-read")
     ("C-c s" "telegram-search")
     ("C-c g" "telegram-refresh")))
