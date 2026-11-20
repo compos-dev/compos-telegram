@@ -554,7 +554,7 @@
 
 
 (define (telegram--claim-letters! buf)
-  "every plain key another map of the page binds types into the field instead"
+  "every plain key another map of the page binds, the page's own map among them, types into the field instead"
   ;; a page from before the field was the buffer's text typed through
   ;; telegram-type remaps; they go
   (keymap--fact! buf 'remaps
@@ -563,15 +563,15 @@
                                    (or (string-prefix? "telegram-type" to)
                                        (equal? to "telegram-backspace"))))))
             (or (keymap--fact buf 'remaps) '())))
+  ;; the buffer's own map comes first, so a letter bound there types
+  ;; whatever the mode, the list or a minor mode binds it to
   (for-each
     (lambda (m)
-      (unless (member m (list "global" "telegram-detail-mode-map" buf))
+      (unless (member m (list "global" buf))
         (for-each (lambda (b)
-                    (let ((cmd (cadr b)))
-                      (when (and (= (string-length (car b)) 1) (string? cmd)
-                                 (not (string-prefix? "telegram-" cmd))
-                                 (not (string-prefix? "keymap:" cmd)))
-                        (local-remap*! buf cmd "self-insert-command"))))
+                    (when (and (= (string-length (car b)) 1) (string? (cadr b))
+                               (not (string-prefix? "keymap:" (cadr b))))
+                      (local-set-key* buf (car b) "self-insert-command")))
                   (keymap-bindings m))))
     (buffer-keymaps buf)))
 
