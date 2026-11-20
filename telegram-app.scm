@@ -477,7 +477,22 @@
 
 ;;; ---------------------------------------------------------------- live
 
+(define *telegram-seen* (if (boundp '*telegram-seen*) *telegram-seen* '()))
+
+(define (telegram--seen! e)
+  "#t when message E came in before: a send comes back from the bridge and again from the feed"
+  (let ((key (string-append (value->string (plist-get e 'chat_id)) ":"
+                            (value->string (plist-get (plist-get e 'message) 'id)))))
+    (if (member key *telegram-seen*)
+        #t
+        (begin (set! *telegram-seen* (take (cons key *telegram-seen*) (min 500 (+ 1 (length *telegram-seen*)))))
+               #f))))
+
 (define (telegram--incoming! e)
+  (unless (telegram--seen! e)
+    (telegram--incoming-new! e)))
+
+(define (telegram--incoming-new! e)
   (let* ((id (plist-get e 'chat_id))
          (m (plist-get e 'message))
          (old (telegram--dialog id))

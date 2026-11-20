@@ -193,8 +193,11 @@ async def search(request):
 
 async def send(request):
     body = await request.json()
-    m = await client.send_message(await entity(body["chat"]), body["text"],
-                                  reply_to=body.get("reply_to"))
+    chat = await entity(body["chat"])
+    m = await client.send_message(chat, body["text"], reply_to=body.get("reply_to"))
+    # Telegram sends no update to the session for its own message, so every
+    # other follower of the feed would never see it: the send goes in itself
+    await publish(await m.get_chat(), m.chat_id, m)
     return ok(message_json(m))
 
 
@@ -225,20 +228,23 @@ async def download(request):
     return web.FileResponse(path)
 
 
-@client.on(events.NewMessage)
-async def on_message(event):
+async def publish(chat, chat_id, m):
+    """put message M of CHAT in the feed every follower long-polls"""
     global seq
-    chat = await event.get_chat()
     name = utils.get_display_name(chat) if chat else ""
-    m = event.message
     if m.sender is None:
         await m.get_sender()
     async with changed:
         seq += 1
-        log.append((seq, {"type": "message", "seq": seq, "chat_id": event.chat_id,
+        log.append((seq, {"type": "message", "seq": seq, "chat_id": chat_id,
                           "chat": name, "kind": kind_of(chat), "message": message_json(m, name)}))
         del log[:-1000]
         changed.notify_all()
+
+
+@client.on(events.NewMessage)
+async def on_message(event):
+    await publish(await event.get_chat(), event.chat_id, event.message)
 
 
 async def main():
