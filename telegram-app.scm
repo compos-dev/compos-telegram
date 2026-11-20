@@ -296,7 +296,9 @@
 .tg-caret { display:inline-block; width:2px; height:1.1em; margin:0 1px -2px 0; background:#3390ec; animation:tg-blink 1s steps(1) infinite; }
 @keyframes tg-blink { 50% { opacity:0; } }
 .tg-compose.tg-typing { box-shadow:0 0 0 1.5px #3390ec inset; }
-.tg-compose { position:sticky; bottom:8px; z-index:2; background:color-mix(in srgb, var(--default-fg) 6%, var(--default-bg)); box-shadow:0 -6px 12px var(--default-bg); }
+.blocks-scroll:has(> .tg-compose) { display:flex; flex-direction:column; }
+.blocks-scroll:has(> .tg-compose) > * { flex-shrink:0; }
+.tg-compose { margin-top:auto; position:sticky; bottom:8px; z-index:2; background:color-mix(in srgb, var(--default-fg) 6%, var(--default-bg)); box-shadow:0 -6px 12px var(--default-bg); }
 .tg-compose.tg-typing { box-shadow:0 0 0 1.5px #3390ec inset, 0 -6px 12px var(--default-bg); }
 .tg-send { cursor:pointer; }
 .tg-compose:not(.tg-typing) .tg-send { opacity:.45; }
