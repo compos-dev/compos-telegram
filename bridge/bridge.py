@@ -18,6 +18,7 @@ Authorization: Bearer $TELEGRAM_BRIDGE_TOKEN.
   POST /read           {chat}
   GET  /updates?after=&timeout=        long poll: new messages since seq AFTER
   GET  /download?chat=&id=             the media of one message, as bytes
+  GET  /photo?chat=[&fresh=1]          the chat's small profile photo, as a jpeg
 """
 import asyncio
 import os
@@ -228,6 +229,18 @@ async def download(request):
     return web.FileResponse(path)
 
 
+async def photo(request):
+    """the small profile photo of a chat, as a jpeg; 404 when it has none"""
+    chat = request.query["chat"]
+    path = os.path.join(FILES, "avatars", f"{chat}.jpg")
+    if not os.path.exists(path) or request.query.get("fresh") == "1":
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        got = await client.download_profile_photo(await client.get_entity(int(chat)), file=path, download_big=False)
+        if not got:
+            return fail("no photo", 404)
+    return web.FileResponse(path, headers={"Content-Type": "image/jpeg"})
+
+
 async def publish(chat, chat_id, m):
     """put message M of CHAT in the feed every follower long-polls"""
     global seq
@@ -259,6 +272,7 @@ async def main():
         web.get("/messages", messages), web.get("/search", search),
         web.post("/send", send), web.post("/read", read),
         web.get("/updates", updates), web.get("/download", download),
+        web.get("/photo", photo),
     ])
     runner = web.AppRunner(app)
     await runner.setup()
