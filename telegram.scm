@@ -219,6 +219,53 @@
 (define (telegram-user-chat id)
   (let ((entry (telegram--allowed id)))
     (and entry (telegram-chat-for id (cadr entry)))))
+
+;; After /new a Telegram conversation talks to a chat of its own in the
+;; routed group, until the next /new or /main. A session holds the chat's
+;; buffer until its first send, then its slug, which outlives the rename a
+;; chat makes after its first prompt. Sessions are kept in the content
+;; cache, so they outlive a restart.
+(define *telegram-sessions*
+  (if (boundp '*telegram-sessions*)
+      *telegram-sessions*
+      (let ((saved (cache-get 'telegram "sessions")))
+        (if (string? saved)
+            (map (lambda (p) (cons (plist-get p 'chat) (plist-get p 'key))) (or (json-parse saved) '()))
+            '()))))
+
+(define (telegram--sessions-save!)
+  (cache-put! 'telegram "sessions"
+    (json-encode (map (lambda (e) (list 'chat (car e) 'key (cdr e))) *telegram-sessions*))))
+
+(define (telegram--session-set! chat-id key)
+  (set! *telegram-sessions*
+    (append (if key (list (cons chat-id key)) '())
+            (filter (lambda (e) (not (equal? (car e) chat-id))) *telegram-sessions*)))
+  (telegram--sessions-save!))
+
+(define (telegram--session chat-id)
+  "the live chat buffer of CHAT-ID's session, or #f"
+  (let ((e (assoc chat-id *telegram-sessions*)))
+    (and e (or (subagent-live-buffer (cdr e))
+               (and (buffer-exists? (cdr e)) (cdr e))))))
+
+(define (telegram--session-promote! chat-id slug)
+  (let ((e (assoc chat-id *telegram-sessions*)))
+    (when (and e slug (not (equal? (cdr e) slug)))
+      (telegram--session-set! chat-id slug))))
+
+;; a new chat in GROUP, made quietly: nothing shows it
+(define (telegram--new-chat! group)
+  ;; group-chat makes the group when the route names a new one
+  (let ((id (begin (group-chat group) (group-resolve-id group))))
+    (and id
+         (let ((buf (group-chat-new-name id)))
+           (buffer-create buf)
+           (group-chat-init! buf id)
+           (when (boundp 'llm-default-bundle-apply!) (llm-default-bundle-apply! buf id))
+           (chat-set-group! buf id)
+           (when (boundp 'workspace-chat-inherit!) (workspace-chat-inherit! buf (group-name id)))
+           buf))))
 (public! 'telegram-user-chat "(telegram-user-chat ID) — the agent chat of approved Telegram user ID, made when it has none")
 
 (define (telegram--busy? buf)
@@ -317,7 +364,9 @@
         (chat-replace-input! buf prompt)
         (run-command "agent-send")))
     ;; the send starts the agent, and only then does the chat have its slug
-    (telegram--await! (subagent-slug buf) chat-id message-id)))
+    (let ((slug (subagent-slug buf)))
+      (telegram--session-promote! chat-id slug)
+      (telegram--await! slug chat-id message-id))))
 
 ;;; ---------------------------------------------------------------- media
 
@@ -355,13 +404,19 @@
 
 ;;; ---------------------------------------------------------------- commands
 
-(define (telegram--command! cmd buf chat-id message-id)
+(define (telegram--command! cmd buf chat-id message-id group)
   (cond
     ((equal? cmd "/new")
-     (when (telegram--busy? buf) (with-current-buffer buf (lambda () (run-command "chat-abort"))))
-     (let ((slug (subagent-slug buf))) (when slug (telegram--turn-drop! slug)))
-     (with-current-buffer buf (lambda () (run-command "chat-reset")))
-     (telegram-send! chat-id "Started a fresh conversation." message-id))
+     ;; the old chat stays as it is, for whoever else talks to it
+     (let ((fresh (telegram--new-chat! group)))
+       (if (not fresh)
+           (telegram-send! chat-id "I could not start a new chat." message-id)
+           (begin
+             (telegram--session-set! chat-id fresh)
+             (telegram-send! chat-id (string-append "Started a new chat in **" group "**. Your next message goes to it; /main goes back to the group's main chat.") message-id)))))
+    ((equal? cmd "/main")
+     (telegram--session-set! chat-id #f)
+     (telegram-send! chat-id (string-append "Back to the main chat of **" group "**.") message-id))
     ((equal? cmd "/stop")
      (if (telegram--busy? buf)
          (begin (with-current-buffer buf (lambda () (run-command "chat-abort")))
@@ -376,7 +431,7 @@
        message-id))
     (else
      (telegram-send! chat-id
-       "Send a message and the agent answers. Photos, files and voice notes work too.\n\n/new — start a fresh conversation\n/stop — stop the current answer\n/status — what the agent is doing"
+       "Send a message and the agent answers. Photos, files and voice notes work too.\n\n/new — start a new chat\n/main — go back to the main chat\n/stop — stop the current answer\n/status — what the agent is doing"
        message-id))))
 
 ;;; ---------------------------------------------------------------- incoming
@@ -426,16 +481,17 @@
                                 "**. Ask to have it approved, and you'll get a message here."))
                (telegram-send! chat-id "Message me directly first to pair." message-id)))
           (else
-           (let* ((buf (if private?
-                           (telegram-user-chat id)
-                           (telegram-chat-for chat-id (or (plist-get chat 'title) "group"))))
+           (let* ((group (if private?
+                             (telegram--route id (cadr entry))
+                             (telegram--route chat-id (or (plist-get chat 'title) "group"))))
+                  (buf (or (telegram--session chat-id) (group-chat group)))
                   (who (if private? "" (string-append (cadr entry) ": ")))
                   (head (string-append "[Telegram, " (if private? (cadr entry) (or (plist-get chat 'title) "group")) "] ")))
              (cond
                ((equal? cmd "/start")
                 (telegram-send! chat-id (string-append "Hi " (cadr entry) ", you're connected. Send me a message. /help shows what I can do.")))
-               ((member cmd '("/new" "/reset" "/stop" "/status" "/help"))
-                (telegram--command! (if (equal? cmd "/reset") "/new" cmd) buf chat-id message-id))
+               ((member cmd '("/new" "/reset" "/main" "/stop" "/status" "/help"))
+                (telegram--command! (if (equal? cmd "/reset") "/new" cmd) buf chat-id message-id group))
                ((telegram--attachment msg)
                 => (lambda (att)
                      (telegram--typing! chat-id)
@@ -490,7 +546,8 @@
                     (set! *telegram-username* (plist-get me 'username))
                     (set! *telegram-bot-id* (plist-get me 'id))
                     (telegram--call "setMyCommands"
-                      (list 'commands (list (list 'command "new" 'description "Start a fresh conversation")
+                      (list 'commands (list (list 'command "new" 'description "Start a new chat")
+                                            (list 'command "main" 'description "Back to the main chat")
                                             (list 'command "stop" 'description "Stop the current answer")
                                             (list 'command "status" 'description "What the agent is doing")
                                             (list 'command "help" 'description "What I can do"))))
