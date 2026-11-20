@@ -476,8 +476,8 @@
                       (and (http-ok? r)
                            (begin (write-file! (telegram--avatar-path id) (http-body r)) #t))))
                   todo))
-        (lambda (got)
-          (when (pair? got)
+        (lambda (ok got)
+          (when (and ok (pair? got))
             ;; the list keeps a row's drawing while its data stays: the photo is data
             (set! *telegram-dialogs*
               (map (lambda (d) (if (member (plist-get d 'id) got) (telegram--plist-put d 'photo #t) d)) *telegram-dialogs*))
