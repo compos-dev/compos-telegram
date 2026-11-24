@@ -781,6 +781,13 @@
 (detail-name! "telegram-detail-mode"
   (lambda (buf) (string-append "*telegram kept: " (let ((d (telegram--dialog (buffer-local buf 'telegram-chat)))) (if d (telegram--name d) buf)) "*")))
 
+;; a person's page and their bot conversation share one chat: M-o opens the
+;; chat the bot answers them in (telegram--person-chat! keeps it under this key)
+(mode-chat-key! "telegram-detail-mode"
+  (lambda (src)
+    (let ((id (buffer-local src 'telegram-chat)))
+      (if (number? id) (string-append "telegram:" (number->string id)) src))))
+
 (mode-icon! "telegram-mode" "T")
 (mode-icon! "telegram-detail-mode" "T")
 

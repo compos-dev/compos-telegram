@@ -216,9 +216,52 @@
   (group-chat (telegram--route id name)))
 (public! 'telegram-chat-for "(telegram-chat-for ID NAME) — the chat that answers Telegram user or group ID called NAME, by telegram-chat-routes")
 
+(define (telegram--person-key id)
+  (string-append "telegram:" (number->string id)))
+
+(define (telegram--person-chat! id name)
+  "ID's own chat, kept for the key telegram:ID, the one M-o opens on their
+Telegram page; made quietly in the default route's group when it has none"
+  (let* ((key (telegram--person-key id))
+         (kept (chat-for key)))
+    (if (and kept (buffer-exists? kept))
+        kept
+        (let* ((hit (assoc 'default telegram-chat-routes))
+               (group (if hit (cadr hit) (telegram--chat-name name)))
+               (buf (telegram--new-chat! group)))
+          (and buf
+               (begin
+                 (chat-for! key buf (group-resolve-id group))
+                 ;; the title renames the buffer: answer the new name
+                 (let ((chat (or (chat-title buf (string-append "Telegram: " name)) buf)))
+                   (telegram--channel-todo! chat id name (group-resolve-id group))
+                   chat)))))))
+
+(define (telegram--channel-todo! chat id name group)
+  "each Telegram channel has its own task, worked by its chat: the open one
+kept for this channel, else a new one"
+  (when (boundp 'todo-create)
+   (let ((open (filter (lambda (t) (equal? (plist-get t 'source) (telegram--person-key id))) (todo-list))))
+    (if (pair? open)
+     (plist-get (car open) 'id)
+    (todo-create (string-append "Telegram: " name)
+      (list 'group group 'state "doing"
+            'source (telegram--person-key id)
+            'assignee (chat-stable-id! chat)
+            'goal (string-append "What " name " asks on Telegram gets answered and done")
+            'notes (string-append "The @" (or *telegram-username* "bot") " conversation with " name
+                                  " (Telegram chat " (number->string id) "). This chat answers it; log what was asked and done here.")
+            'by "telegram"))))))
+
+(define (telegram--private-chat id name)
+  "the chat that answers ID in a direct message: a route by id or name wins,
+else their own chat"
+  (let ((hit (or (assoc id telegram-chat-routes) (assoc name telegram-chat-routes))))
+    (if hit (group-chat (cadr hit)) (telegram--person-chat! id name))))
+
 (define (telegram-user-chat id)
   (let ((entry (telegram--allowed id)))
-    (and entry (telegram-chat-for id (cadr entry)))))
+    (and entry (telegram--private-chat id (cadr entry)))))
 
 ;; After /new a Telegram conversation talks to a chat of its own in the
 ;; routed group, until the next /new or /main. A session holds the chat's
@@ -353,9 +396,29 @@
             (cons (list (list slug) (list slug) (lambda (_) (telegram--finish! slug)))
                   *subagent-waiters*))))))
 
+(define (telegram--task-brief buf chat-id)
+  "how a channel's chat keeps its task: one sub-task per request"
+  (let ((key (chat-for-key buf)))
+    (if (and (string? key) (string-prefix? "telegram:" key) (boundp 'todo-create))
+        (let* ((title (or (chat-title-of buf) key))
+               (name (if (string-prefix? "Telegram: " title) (substring title 10 (string-length title)) title))
+               (hit (assoc 'default telegram-chat-routes))
+               (group (group-resolve-id (if hit (cadr hit) title)))
+               (task (telegram--channel-todo! buf chat-id name group))
+               (me (chat-stable-id! buf)))
+          (string-append
+           "\n\nThis conversation has its own task, " task
+           ". File each request they make as a sub-task of it: (todo-create TITLE (list 'group \"" group
+           "\" 'parent \"" task "\" 'state \"doing\" 'assignee \"" me "\" 'by \"" me
+           "\")). Close it with (todo-done ID RESULT \"" me
+           "\") when it is done, or (todo-wait ID REASON \"" me
+           "\") when it waits on someone. Thanks, acknowledgements and small talk get no sub-task."))
+        "")))
+
 (define (telegram--to-agent! buf chat-id message-id prompt &optional user-id)
   (let ((prompt (if (null? (chat-record buf))
-                    (string-append (if user-id (telegram--brief user-id) telegram-group-brief) "\n\n" prompt)
+                    (string-append (if user-id (telegram--brief user-id) telegram-group-brief)
+                                   (telegram--task-brief buf chat-id) "\n\n" prompt)
                     prompt)))
     (telegram--typing! chat-id)
     (telegram--react! chat-id message-id "👀")
@@ -484,7 +547,10 @@
            (let* ((group (if private?
                              (telegram--route id (cadr entry))
                              (telegram--route chat-id (or (plist-get chat 'title) "group"))))
-                  (buf (or (telegram--session chat-id) (group-chat group)))
+                  (buf (or (telegram--session chat-id)
+                           (if private?
+                               (telegram--private-chat id (cadr entry))
+                               (telegram--private-chat chat-id (or (plist-get chat 'title) "group")))))
                   (who (if private? "" (string-append (cadr entry) ": ")))
                   (head (string-append "[Telegram, " (if private? (cadr entry) (or (plist-get chat 'title) "group")) "] ")))
              (cond
